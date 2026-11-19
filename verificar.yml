@@ -1,0 +1,53 @@
+name: Verificar
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # Falla (rojo): quedaron marcadores de conflicto sin resolver
+      - name: Revisar marcadores de conflicto
+        run: |
+          if grep -rnE '^(<<<<<<< |=======$|>>>>>>> )' src; then
+            echo "::error::Hay marcadores de conflicto sin resolver"
+            exit 1
+          fi
+
+      # Falla (rojo): no compila o hay pruebas en rojo
+      - name: Compilar y ejecutar pruebas
+        run: mvn -B test
+
+      # Solo advierte (amarillo): nunca falla el job
+      - name: Revisar Conventional Commits
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          ZERO=0000000000000000000000000000000000000000
+          if [ -n "$BASE_SHA" ]; then RANGE="$BASE_SHA..HEAD"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "$ZERO" ]; then RANGE="$BEFORE..HEAD"
+          else RANGE="origin/main..HEAD"
+          fi
+          re='^(feat|fix|test|refactor|docs|style|chore)\((delete|search|status|count|banner)\): [a-záéíóúñ].*[^.]$'
+          merge_re="^Merge (branch|remote-tracking branch|pull request) "
+          git log "$RANGE" --format='%h %s' | while read -r hash msg; do
+            # Los merges automaticos de Git no cuentan. El commit que
+            # resuelve el conflicto ya trae un mensaje convencional y si se valida.
+            if [[ "$msg" =~ $merge_re ]]; then continue; fi
+            if ! [[ "$msg" =~ $re ]] || [ "${#msg}" -gt 72 ]; then
+              echo "::warning::Commit $hash no cumple Conventional Commits: $msg"
+            fi
+          done
